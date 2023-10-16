@@ -12,8 +12,12 @@ import static org.hamcrest.text.MatchesPattern.matchesPattern;
 import java.util.ArrayList;
 import java.util.List;
 
+import hudson.model.labels.LabelAtom;
 import org.jenkinsci.plugins.envinject.EnvInjectBuildWrapper;
 import org.jenkinsci.plugins.envinject.EnvInjectJobPropertyInfo;
+import org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition;
+import org.jenkinsci.plugins.workflow.job.WorkflowJob;
+import org.jenkinsci.plugins.workflow.job.WorkflowRun;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -62,6 +66,8 @@ public class LogstashIntegrationTest
 
         slave = jenkins.createSlave();
         slave.setLabelString("myLabel");
+        jenkins.createOnlineSlave(new LabelAtom("test"));
+
         project = jenkins.createFreeStyleProject();
     }
 
@@ -206,19 +212,50 @@ public class LogstashIntegrationTest
     @Test
     public void enableGlobally() throws Exception
     {
-      LogstashConfiguration.getInstance().setEnableGlobally(true);
-      QueueTaskFuture<FreeStyleBuild> f = project.scheduleBuild2(0);
+        boolean isEnableGloballyInit = LogstashConfiguration.getInstance().isEnableGlobally();
+        LogstashConfiguration.getInstance().setEnableGlobally(true);
+        QueueTaskFuture<FreeStyleBuild> f = project.scheduleBuild2(0);
 
-      FreeStyleBuild build = f.get();
-      assertThat(build.getResult(), equalTo(Result.SUCCESS));
-      List<JSONObject> dataLines = memoryDao.getOutput();
-      assertThat(dataLines.size(), greaterThan(3));
-      JSONObject firstLine = dataLines.get(0);
+        FreeStyleBuild build = f.get();
+        assertThat(build.getResult(), equalTo(Result.SUCCESS));
+        List<JSONObject> dataLines = memoryDao.getOutput();
+        assertThat(dataLines.size(), greaterThan(3));
+        JSONObject firstLine = dataLines.get(0);
       JSONObject lastLine = dataLines.get(dataLines.size()-1);
-      JSONObject data = firstLine.getJSONObject("data");
+        JSONObject data = firstLine.getJSONObject("data");
       assertThat(data.getString("buildHost"),equalTo("Jenkins"));
       assertThat(data.getString("buildLabel"),equalTo("master"));
       assertThat(lastLine.getJSONArray("message").get(0).toString(),equalTo("Finished: SUCCESS"));
+
+        LogstashConfiguration.getInstance().setEnableGlobally(isEnableGloballyInit);
+    }
+
+    @Test
+    public void enableGloballyOnRemote() throws Exception
+    {
+        boolean isEnableGloballyInit = LogstashConfiguration.getInstance().isEnableGlobally();
+        LogstashConfiguration.getInstance().setEnableGlobally(true);
+
+        WorkflowJob p = jenkins.jenkins.createProject(WorkflowJob.class, "pipelineOnWorkerNode");
+        p.setDefinition(new CpsFlowDefinition("node('test') {echo 'foo'}\n", true));
+        WorkflowRun build = p.scheduleBuild2(0).get();
+
+        assertThat(build.getResult(), equalTo(Result.SUCCESS));
+        List<JSONObject> dataLines = memoryDao.getOutput();
+
+        assertThat(dataLines.size(), greaterThan(10));
+        boolean containsFoo = dataLines.stream()
+                .anyMatch(line -> line.getString("message").contains("foo"));
+        assertThat("Expected at least one line to contain 'foo'", containsFoo, is(true));
+        JSONObject firstLine = dataLines.get(0);
+        JSONObject lastLine = dataLines.get(dataLines.size()-1);
+        JSONObject data = firstLine.getJSONObject("data");
+
+        assertThat(data.getString("buildHost"),equalTo("Jenkins"));
+        assertThat(data.getString("buildLabel"),equalTo("master"));
+        assertThat(lastLine.getJSONArray("message").get(0).toString(),equalTo("Finished: SUCCESS"));
+
+        LogstashConfiguration.getInstance().setEnableGlobally(isEnableGloballyInit);
     }
 
     @Test
